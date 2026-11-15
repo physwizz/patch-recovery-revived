@@ -4,3 +4,6 @@ unpacked/*
 .requirements
 log/*
 boot_editor_v15_r1
+
+# Rust build output
+tools/hexpatch/target/
