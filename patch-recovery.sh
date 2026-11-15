@@ -22,6 +22,8 @@ rm -rf "${WDIR}/recovery/"*
 # Define magiskboot's, boot_editor's path and aliases
 export BOOT_EDITOR="${WDIR}/boot_editor_v15_r1/gradlew"
 export MAGISKBOOT="${WDIR}/binaries/magiskboot"
+export HEXPATCH_DIR="${WDIR}/tools/hexpatch"
+export HEXPATCH="${HEXPATCH_DIR}/target/release/hexpatch"
 alias r_unpack="$BOOT_EDITOR unpack"
 alias r_repack="$BOOT_EDITOR pack"
 alias r_clean="$BOOT_EDITOR clear"
@@ -43,8 +45,24 @@ init_patch_recovery(){
         info "\n[INFO]" "Installing requirements...\n"
         {
             sudo apt update -y
-            sudo apt install -y lz4 git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils
+            sudo apt install -y lz4 git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils cargo
         } >> "${WDIR}/log/log.txt" 2>&1 && touch .requirements
+    fi
+
+    build_hexpatch
+}
+
+# Compila el parcheador en Rust (tools/hexpatch). Si no hay cargo, se usa magiskboot.
+build_hexpatch(){
+    [ -x "${HEXPATCH}" ] && return 0
+
+    if command -v cargo >/dev/null 2>&1; then
+        info "[INFO]" "Compilando hexpatch (Rust)...\n"
+        if ! ( cd "${HEXPATCH_DIR}" && cargo build --release ) >> "${WDIR}/log/log.txt" 2>&1; then
+            warn "[WARN]" "No se pudo compilar hexpatch, se usara magiskboot hexpatch\n"
+        fi
+    else
+        warn "[WARN]" "cargo no esta instalado, se usara magiskboot hexpatch\n"
     fi
 }
 
@@ -160,15 +178,32 @@ apply_hex_patches(){
         log "[PATCH] Trying" "${search_pattern} -> ${replace_pattern}"
         
         # Apply the patch and capture the exit code
-        ${MAGISKBOOT} hexpatch "${binary_file}" "${search_pattern}" "${replace_pattern}"
-        local patch_result=$?
-        
-        if [ $patch_result -eq 0 ]; then
-            info "[SUCCESS]" "Patch applied successfully\n"
-            ((patches_applied++))
+        # hexpatch (Rust): 0 = aplicado, 1 = no encontrado, 3 = varias coincidencias,
+        # 4 = tamanos distintos. En 3 y 4 no escribe nada.
+        local patch_result
+        if [ -x "${HEXPATCH}" ]; then
+            "${HEXPATCH}" "${binary_file}" "${search_pattern}" "${replace_pattern}" 2>&1 | tee -a "${WDIR}/log/log.txt" >&2
+            patch_result=${PIPESTATUS[0]}
         else
-            warn "[SKIP] Pattern not found" "skipping..\n"
+            ${MAGISKBOOT} hexpatch "${binary_file}" "${search_pattern}" "${replace_pattern}"
+            patch_result=$?
         fi
+
+        case $patch_result in
+            0)
+                info "[SUCCESS]" "Patch applied successfully\n"
+                ((patches_applied++))
+                ;;
+            3)
+                warn "[SKIP] Ambiguous pattern" "more than one match, not applied\n"
+                ;;
+            4)
+                warn "[SKIP] Size mismatch" "search and replace differ in length, not applied\n"
+                ;;
+            *)
+                warn "[SKIP] Pattern not found" "skipping..\n"
+                ;;
+        esac
     done
     
     # Re-enable exit on error

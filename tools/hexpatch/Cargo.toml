@@ -1,0 +1,10 @@
+[package]
+name = "hexpatch"
+version = "0.1.0"
+edition = "2021"
+description = "Parcheador hexadecimal con modo de prueba y control de coincidencias"
+
+[dependencies]
+
+[profile.release]
+strip = true
